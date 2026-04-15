@@ -1,0 +1,30 @@
+controller_projects:
+- name: Demo Project
+  description: ''
+  organization: Default
+  scm_type: git
+  scm_url: https://github.com/ansible/ansible-tower-samples
+  scm_branch: ''
+  scm_clean: 'False'
+  scm_delete_on_update: 'False'
+  scm_update_on_launch: 'False'
+  scm_update_cache_timeout: '0'
+  scm_refspec: ''
+  allow_override: 'False'
+  update_project: 'False'
+  timeout: '0'
+- name: aap24_conversion_factory
+  description: ''
+  organization: Default
+  scm_type: git
+  scm_url: https://github.com/ericcames/aap24_conversion_factory.git
+  scm_branch: ''
+  scm_clean: 'False'
+  scm_delete_on_update: 'True'
+  scm_update_on_launch: 'True'
+  scm_update_cache_timeout: '0'
+  scm_refspec: ''
+  allow_override: 'False'
+  update_project: 'False'
+  timeout: '0'
+...

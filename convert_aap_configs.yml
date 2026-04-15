@@ -1,0 +1,13 @@
+---
+- name: "Convert AAP 2.4 configs to AAP 2.5 format"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap24_configs_dir: "/home/eames/claude-repos/hello.claude/aap24_configs_source"
+    aap25_configs_dir: "/home/eames/claude-repos/hello.claude/aap25_configs"
+
+  tasks:
+    - name: Call upgrade_config role
+      ansible.builtin.include_role:
+        name: infra.aap_configuration_extended.upgrade_config
