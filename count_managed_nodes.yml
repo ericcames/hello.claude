@@ -4,8 +4,8 @@
   connection: local
   gather_facts: true
   vars:
-    controller_hostname: "{{ lookup('env', 'CONTROLLER_HOST') | default('aap-aap.apps.cluster-2gqbz-1.dynamic.redhatworkshops.io', true) }}"
-    controller_username: "{{ lookup('env', 'CONTROLLER_USERNAME') | default('admin', true) }}"
+    controller_hostname: "{{ lookup('env', 'CONTROLLER_HOST') }}"
+    controller_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
     controller_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
     controller_validate_certs: false
     # Nodes to exclude from managed node count
