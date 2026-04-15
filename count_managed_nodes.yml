@@ -15,6 +15,22 @@
       - ::1
 
   tasks:
+    - name: Validate required credentials and environment
+      ansible.builtin.assert:
+        that:
+          - controller_hostname is defined
+          - controller_hostname | length > 0
+          - controller_hostname is not match('^\s*$')
+          - controller_username is defined
+          - controller_username | length > 0
+          - controller_password is defined
+          - controller_password | length > 0
+          - exclude_patterns is defined
+          - exclude_patterns | length > 0
+        success_msg: "Pre-flight validation passed: All required credentials are set"
+        fail_msg: "Pre-flight validation failed: Missing required environment variables (CONTROLLER_HOST, CONTROLLER_USERNAME, or CONTROLLER_PASSWORD)"
+        quiet: false
+
     - name: Get all inventories from AAP
       ansible.builtin.uri:
         url: "https://{{ controller_hostname }}/api/controller/v2/inventories/"
@@ -73,21 +89,17 @@
         return_content: true
       register: aap_config
 
-    - name: Validate managed node count and subscription compliance
+    - name: Validate subscription compliance
       ansible.builtin.assert:
         that:
-          - controller_hostname is defined
-          - controller_hostname | length > 0
-          - controller_username is defined
-          - controller_password is defined
           - inventories_response.json is defined
           - hosts_response.json is defined
           - aap_config.json is defined
           - unique_nodes is defined
           - unique_nodes | length >= 0
           - (unique_nodes | length) <= (aap_config.json.license_info.instance_count | default(999999) | int)
-        success_msg: "Validation passed: {{ unique_nodes | length }} managed nodes within {{ aap_config.json.license_info.instance_count | default('unlimited') }} subscription limit"
-        fail_msg: "Validation failed: Check managed node count ({{ unique_nodes | length }}) against subscription limit ({{ aap_config.json.license_info.instance_count | default('N/A') }})"
+        success_msg: "Compliance check passed: {{ unique_nodes | length }} managed nodes within {{ aap_config.json.license_info.instance_count | default('unlimited') }} subscription limit"
+        fail_msg: "Compliance check FAILED: Managed nodes ({{ unique_nodes | length }}) EXCEEDS subscription limit ({{ aap_config.json.license_info.instance_count | default('N/A') }})"
         quiet: false
 
     - name: Display managed node report
