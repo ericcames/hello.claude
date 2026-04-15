@@ -1,0 +1,118 @@
+---
+- name: Count AAP Managed Nodes
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    controller_hostname: "{{ lookup('env', 'CONTROLLER_HOST') | default('aap-aap.apps.cluster-2gqbz-1.dynamic.redhatworkshops.io', true) }}"
+    controller_username: "{{ lookup('env', 'CONTROLLER_USERNAME') | default('admin', true) }}"
+    controller_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+    controller_validate_certs: false
+    # Nodes to exclude from managed node count
+    exclude_patterns:
+      - localhost
+      - 127.0.0.1
+      - ::1
+
+  tasks:
+    - name: Get all inventories from AAP
+      ansible.builtin.uri:
+        url: "https://{{ controller_hostname }}/api/v2/inventories/"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: inventories_response
+      no_log: true
+
+    - name: Get all hosts from AAP
+      ansible.builtin.uri:
+        url: "https://{{ controller_hostname }}/api/v2/hosts/"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: hosts_response
+      no_log: true
+
+    - name: Handle paginated host results
+      ansible.builtin.uri:
+        url: "{{ hosts_response.json.next }}"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: hosts_page
+      no_log: true
+      loop: "{{ range(0, (hosts_response.json.count / 200) | int) | list }}"
+      when: hosts_response.json.next is defined
+      vars:
+        hosts_response: "{{ hosts_page if hosts_page is defined else hosts_response }}"
+
+    - name: Build list of unique managed nodes
+      ansible.builtin.set_fact:
+        all_host_names: "{{ hosts_response.json.results | map(attribute='name') | list }}"
+        unique_nodes: "{{ hosts_response.json.results |
+                         map(attribute='name') |
+                         list |
+                         difference(exclude_patterns) |
+                         unique |
+                         sort }}"
+
+    - name: Get subscription information
+      ansible.builtin.uri:
+        url: "https://{{ controller_hostname }}/api/v2/config/"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: aap_config
+      no_log: true
+
+    - name: Display managed node report
+      ansible.builtin.debug:
+        msg:
+          - "========================================"
+          - "AAP MANAGED NODE REPORT"
+          - "========================================"
+          - "Controller: {{ controller_hostname }}"
+          - "AAP Version: {{ aap_config.json.version | default('N/A') }}"
+          - "License Type: {{ aap_config.json.license_info.license_type | default('N/A') }}"
+          - ""
+          - "INVENTORY SUMMARY:"
+          - "  Total Inventories: {{ inventories_response.json.count }}"
+          - "  Total Host Entries: {{ hosts_response.json.count }}"
+          - ""
+          - "MANAGED NODE COUNT:"
+          - "  Unique Managed Nodes: {{ unique_nodes | length }}"
+          - "  Subscription Limit: {{ aap_config.json.license_info.instance_count | default('Unlimited') }}"
+          - "  Available: {{ (aap_config.json.license_info.instance_count | default(999999) | int) - (unique_nodes | length) }}"
+          - ""
+          - "========================================"
+          - "MANAGED NODES LIST:"
+          - "{{ unique_nodes | to_nice_yaml }}"
+          - ""
+          - "Note: Count excludes localhost and loopback addresses."
+          - "Each unique identifiable node counts once, even if in multiple inventories."
+          - "========================================"
+
+    - name: Create summary artifact
+      ansible.builtin.set_stats:
+        data:
+          managed_node_count: "{{ unique_nodes | length }}"
+          subscription_limit: "{{ aap_config.json.license_info.instance_count | default(0) }}"
+          total_inventories: "{{ inventories_response.json.count }}"
+          total_host_entries: "{{ hosts_response.json.count }}"
+          controller_host: "{{ controller_hostname }}"
+          aap_version: "{{ aap_config.json.version | default('N/A') }}"
+          report_timestamp: "{{ ansible_date_time.iso8601 }}"
+        per_host: false
+...
