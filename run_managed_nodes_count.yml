@@ -1,0 +1,28 @@
+---
+- name: Run Managed Nodes Count Job
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    controller_hostname: "{{ lookup('env', 'CONTROLLER_HOST') }}"
+    controller_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
+    controller_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+    controller_validate_certs: false
+
+  tasks:
+    - name: Launch Count Managed Nodes job
+      ansible.controller.job_launch:
+        job_template: "Count Managed Nodes"
+        wait: true
+        controller_host: "{{ controller_hostname }}"
+        controller_username: "{{ controller_username }}"
+        controller_password: "{{ controller_password }}"
+        validate_certs: "{{ controller_validate_certs }}"
+      register: job
+
+    - name: Display job results
+      ansible.builtin.debug:
+        msg:
+          - "Job ID: {{ job.id }}"
+          - "Job Status: {{ job.status }}"
+          - "Job URL: https://{{ controller_hostname }}/#/jobs/playbook/{{ job.id }}"
