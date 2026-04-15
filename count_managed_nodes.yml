@@ -25,7 +25,6 @@
         validate_certs: "{{ controller_validate_certs }}"
         return_content: true
       register: inventories_response
-      no_log: true
 
     - name: Get all hosts from AAP
       ansible.builtin.uri:
@@ -37,7 +36,6 @@
         validate_certs: "{{ controller_validate_certs }}"
         return_content: true
       register: hosts_response
-      no_log: true
 
     - name: Handle paginated host results
       ansible.builtin.uri:
@@ -49,7 +47,6 @@
         validate_certs: "{{ controller_validate_certs }}"
         return_content: true
       register: hosts_page
-      no_log: true
       loop: "{{ range(0, (hosts_response.json.count / 200) | int) | list }}"
       when: hosts_response.json.next is defined
       vars:
@@ -75,7 +72,6 @@
         validate_certs: "{{ controller_validate_certs }}"
         return_content: true
       register: aap_config
-      no_log: true
 
     - name: Display managed node report
       ansible.builtin.debug:
