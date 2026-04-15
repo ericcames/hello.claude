@@ -8,7 +8,6 @@
     controller_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
     controller_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
     controller_validate_certs: false
-    output_path: "/tmp/aap_export_{{ ansible_date_time.epoch }}"
     # Nodes to exclude from managed node count
     exclude_patterns:
       - localhost
@@ -16,35 +15,54 @@
       - ::1
 
   tasks:
-    - name: Export AAP configuration using filetree_create
-      ansible.builtin.include_role:
-        name: infra.aap_configuration.filetree_create
+    - name: Get all inventories from AAP
+      ansible.builtin.uri:
+        url: "https://{{ controller_hostname }}/api/controller/v2/inventories/"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: inventories_response
+
+    - name: Get all hosts from AAP
+      ansible.builtin.uri:
+        url: "https://{{ controller_hostname }}/api/controller/v2/hosts/"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: hosts_response
+
+    - name: Handle paginated host results
+      ansible.builtin.uri:
+        url: "{{ hosts_response.json.next }}"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: hosts_page
+      loop: "{{ range(0, (hosts_response.json.count / 200) | int) | list }}"
+      when: hosts_response.json.next is defined
       vars:
-        filetree_controller_hosts: "{{ controller_hostname }}"
-        filetree_controller_username: "{{ controller_username }}"
-        filetree_controller_password: "{{ controller_password }}"
-        filetree_controller_verify_ssl: "{{ controller_validate_certs }}"
-        filetree_create_secure_logging: false
-        output_path: "{{ output_path }}"
-
-    - name: Find all host files in export
-      ansible.builtin.find:
-        paths: "{{ output_path }}"
-        patterns: "*hosts*.yaml,*hosts*.yml"
-        recurse: true
-      register: host_files
-
-    - name: Load and aggregate all hosts
-      ansible.builtin.set_fact:
-        all_hosts_raw: "{{ all_hosts_raw | default([]) + (lookup('file', item.path) | from_yaml).controller_hosts | default([]) }}"
-      loop: "{{ host_files.files }}"
-      when: host_files.files | length > 0
+        hosts_response: "{{ hosts_page if hosts_page is defined else hosts_response }}"
 
     - name: Build list of unique managed nodes
       ansible.builtin.set_fact:
-        unique_nodes: "{{ (all_hosts_raw | default([]) | map(attribute='name') | list | difference(exclude_patterns) | unique | sort) if all_hosts_raw is defined else [] }}"
+        all_host_names: "{{ hosts_response.json.results | map(attribute='name') | list }}"
+        unique_nodes: "{{ hosts_response.json.results |
+                         map(attribute='name') |
+                         list |
+                         difference(exclude_patterns) |
+                         unique |
+                         sort }}"
 
-    - name: Get AAP configuration info
+    - name: Get subscription information
       ansible.builtin.uri:
         url: "https://{{ controller_hostname }}/api/controller/v2/config/"
         method: GET
@@ -54,13 +72,6 @@
         validate_certs: "{{ controller_validate_certs }}"
         return_content: true
       register: aap_config
-
-    - name: Count inventories from export
-      ansible.builtin.find:
-        paths: "{{ output_path }}"
-        patterns: "*organization*.yaml,*organization*.yml"
-        recurse: true
-      register: org_files
 
     - name: Display managed node report
       ansible.builtin.debug:
@@ -72,9 +83,9 @@
           - "AAP Version: {{ aap_config.json.version | default('N/A') }}"
           - "License Type: {{ aap_config.json.license_info.license_type | default('N/A') }}"
           - ""
-          - "EXPORT SUMMARY:"
-          - "  Host files found: {{ host_files.files | length }}"
-          - "  Total host entries: {{ all_hosts_raw | default([]) | length }}"
+          - "INVENTORY SUMMARY:"
+          - "  Total Inventories: {{ inventories_response.json.count }}"
+          - "  Total Host Entries: {{ hosts_response.json.count }}"
           - ""
           - "MANAGED NODE COUNT:"
           - "  Unique Managed Nodes: {{ unique_nodes | length }}"
@@ -87,7 +98,6 @@
           - ""
           - "Note: Count excludes localhost and loopback addresses."
           - "Each unique identifiable node counts once, even if in multiple inventories."
-          - "Export path: {{ output_path }}"
           - "========================================"
 
     - name: Create summary artifact
@@ -95,14 +105,10 @@
         data:
           managed_node_count: "{{ unique_nodes | length }}"
           subscription_limit: "{{ aap_config.json.license_info.instance_count | default(0) }}"
-          total_host_entries: "{{ all_hosts_raw | default([]) | length }}"
+          total_inventories: "{{ inventories_response.json.count }}"
+          total_host_entries: "{{ hosts_response.json.count }}"
           controller_host: "{{ controller_hostname }}"
           aap_version: "{{ aap_config.json.version | default('N/A') }}"
           report_timestamp: "{{ ansible_date_time.iso8601 }}"
         per_host: false
-
-    - name: Cleanup export directory
-      ansible.builtin.file:
-        path: "{{ output_path }}"
-        state: absent
 ...
