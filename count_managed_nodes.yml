@@ -73,6 +73,23 @@
         return_content: true
       register: aap_config
 
+    - name: Validate managed node count and subscription compliance
+      ansible.builtin.assert:
+        that:
+          - controller_hostname is defined
+          - controller_hostname | length > 0
+          - controller_username is defined
+          - controller_password is defined
+          - inventories_response.json is defined
+          - hosts_response.json is defined
+          - aap_config.json is defined
+          - unique_nodes is defined
+          - unique_nodes | length >= 0
+          - (unique_nodes | length) <= (aap_config.json.license_info.instance_count | default(999999) | int)
+        success_msg: "Validation passed: {{ unique_nodes | length }} managed nodes within {{ aap_config.json.license_info.instance_count | default('unlimited') }} subscription limit"
+        fail_msg: "Validation failed: Check managed node count ({{ unique_nodes | length }}) against subscription limit ({{ aap_config.json.license_info.instance_count | default('N/A') }})"
+        quiet: false
+
     - name: Display managed node report
       ansible.builtin.debug:
         msg:
