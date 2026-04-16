@@ -33,7 +33,7 @@
 
     - name: Get all inventories from AAP
       ansible.builtin.uri:
-        url: "https://{{ controller_hostname }}/api/controller/v2/inventories/"
+        url: "{{ controller_hostname }}/api/controller/v2/inventories/"
         method: GET
         user: "{{ controller_username }}"
         password: "{{ controller_password }}"
@@ -44,7 +44,7 @@
 
     - name: Get all hosts from AAP
       ansible.builtin.uri:
-        url: "https://{{ controller_hostname }}/api/controller/v2/hosts/"
+        url: "{{ controller_hostname }}/api/controller/v2/hosts/"
         method: GET
         user: "{{ controller_username }}"
         password: "{{ controller_password }}"
@@ -80,7 +80,7 @@
 
     - name: Get subscription information
       ansible.builtin.uri:
-        url: "https://{{ controller_hostname }}/api/controller/v2/config/"
+        url: "{{ controller_hostname }}/api/controller/v2/config/"
         method: GET
         user: "{{ controller_username }}"
         password: "{{ controller_password }}"
