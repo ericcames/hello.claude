@@ -78,6 +78,49 @@
                          unique |
                          sort }}"
 
+    - name: Extract IP addresses and ansible_host from host variables
+      ansible.builtin.set_fact:
+        hosts_with_ips: "{{ hosts_with_ips | default([]) + [item] }}"
+      loop: "{{ hosts_response.json.results }}"
+      vars:
+        parsed_vars: "{{ item.variables | from_yaml if item.variables else {} }}"
+        ansible_host_value: "{{ parsed_vars.ansible_host | default(item.name) }}"
+        hosts_with_ips: "{{ hosts_with_ips | default([]) }}"
+      when: item.name not in exclude_patterns
+
+    - name: Build unique IP/host mapping
+      ansible.builtin.set_fact:
+        host_ip_map: >-
+          {{
+            hosts_response.json.results |
+            map('combine', {'parsed_vars': {}}) |
+            list |
+            map('combine', {
+              'parsed_vars': item.variables | from_yaml if item.variables else {},
+              'connection_target': (item.variables | from_yaml if item.variables else {}).get('ansible_host', item.name)
+            }) |
+            list
+          }}
+
+    - name: Extract unique connection targets (IPs/FQDNs)
+      ansible.builtin.set_fact:
+        all_connection_targets: "{{ host_ip_map | map(attribute='connection_target') | list }}"
+        unique_connection_targets: "{{ host_ip_map |
+                                       map(attribute='connection_target') |
+                                       list |
+                                       difference(exclude_patterns) |
+                                       difference(['127.0.0.1', '::1']) |
+                                       unique |
+                                       sort }}"
+        unique_hostnames_vs_targets: >-
+          {{
+            {
+              'unique_hostnames': (hosts_response.json.results | map(attribute='name') | list | difference(exclude_patterns) | unique | length),
+              'unique_targets': (host_ip_map | map(attribute='connection_target') | list | difference(exclude_patterns) | difference(['127.0.0.1', '::1']) | unique | length),
+              'potential_duplicates': (hosts_response.json.results | map(attribute='name') | list | difference(exclude_patterns) | unique | length) - (host_ip_map | map(attribute='connection_target') | list | difference(exclude_patterns) | difference(['127.0.0.1', '::1']) | unique | length)
+            }
+          }}
+
     - name: Get subscription information
       ansible.builtin.uri:
         url: "{{ controller_hostname }}/api/controller/v2/config/"
@@ -234,6 +277,12 @@
           - "  Subscription Limit: {{ aap_config.json.license_info.instance_count | default('Unlimited') }}"
           - "  Available: {{ (aap_config.json.license_info.instance_count | default(999999) | int) - (active_host_metrics_names | length) }}"
           - ""
+          - "UNIQUE IP/TARGET ADDRESS ANALYSIS:"
+          - "  Unique Hostnames: {{ unique_hostnames_vs_targets.unique_hostnames }}"
+          - "  Unique Connection Targets (ansible_host): {{ unique_hostnames_vs_targets.unique_targets }}"
+          - "  Potential Multi-Homed Hosts: {{ unique_hostnames_vs_targets.potential_duplicates }}"
+          - "  Connection Targets: {{ unique_connection_targets | join(', ') if unique_connection_targets | length > 0 else 'None' }}"
+          - ""
           - "JOB EXECUTION STATISTICS (main_jobevents):"
           - "  Total Jobs (All Time): {{ total_jobs }}"
           - "  Recent Jobs Analyzed: {{ recent_jobs_sample | length }}"
@@ -260,6 +309,8 @@
           - "Each unique identifiable node counts once, even if in multiple inventories."
           - "Job statistics based on unified_jobs API (backed by main_jobevents table)."
           - "Automated hosts extracted from job_host_summaries (aggregated main_jobevents data)."
+          - "IP/Target analysis uses ansible_host variable or hostname as connection target."
+          - "Multi-homed detection: difference between unique hostnames and unique targets."
           - "========================================"
 
     - name: Create summary artifact
@@ -268,6 +319,9 @@
           managed_node_count_inventory_based: "{{ unique_nodes | length }}"
           managed_node_count_host_metrics: "{{ active_host_metrics_names | length }}"
           managed_node_count_job_events: "{{ unique_job_event_hosts | length }}"
+          unique_hostnames: "{{ unique_hostnames_vs_targets.unique_hostnames }}"
+          unique_connection_targets: "{{ unique_hostnames_vs_targets.unique_targets }}"
+          potential_multi_homed_hosts: "{{ unique_hostnames_vs_targets.potential_duplicates }}"
           total_host_metrics: "{{ host_metrics_response.json.count }}"
           active_host_metrics: "{{ active_host_metrics | length }}"
           subscription_limit: "{{ aap_config.json.license_info.instance_count | default(0) }}"
@@ -282,6 +336,7 @@
           total_job_templates: "{{ total_job_templates }}"
           total_job_host_summaries: "{{ total_job_host_summaries }}"
           unique_automated_hosts: "{{ unique_job_event_hosts | join(',') }}"
+          connection_targets_list: "{{ unique_connection_targets | join(',') }}"
           controller_host: "{{ controller_hostname }}"
           aap_version: "{{ aap_config.json.version | default('N/A') }}"
           report_timestamp: "{{ ansible_date_time.iso8601 }}"
