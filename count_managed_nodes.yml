@@ -78,48 +78,32 @@
                          unique |
                          sort }}"
 
-    - name: Extract IP addresses and ansible_host from host variables
+    - name: Build host to connection target mapping
       ansible.builtin.set_fact:
-        hosts_with_ips: "{{ hosts_with_ips | default([]) + [item] }}"
+        host_connection_map: "{{ host_connection_map | default([]) + [connection_info] }}"
       loop: "{{ hosts_response.json.results }}"
       vars:
         parsed_vars: "{{ item.variables | from_yaml if item.variables else {} }}"
-        ansible_host_value: "{{ parsed_vars.ansible_host | default(item.name) }}"
-        hosts_with_ips: "{{ hosts_with_ips | default([]) }}"
-      when: item.name not in exclude_patterns
-
-    - name: Build unique IP/host mapping
-      ansible.builtin.set_fact:
-        host_ip_map: >-
-          {{
-            hosts_response.json.results |
-            map('combine', {'parsed_vars': {}}) |
-            list |
-            map('combine', {
-              'parsed_vars': item.variables | from_yaml if item.variables else {},
-              'connection_target': (item.variables | from_yaml if item.variables else {}).get('ansible_host', item.name)
-            }) |
-            list
-          }}
+        connection_target: "{{ parsed_vars.ansible_host | default(item.name) }}"
+        connection_info:
+          hostname: "{{ item.name }}"
+          connection_target: "{{ connection_target }}"
+          variables: "{{ item.variables }}"
 
     - name: Extract unique connection targets (IPs/FQDNs)
       ansible.builtin.set_fact:
-        all_connection_targets: "{{ host_ip_map | map(attribute='connection_target') | list }}"
-        unique_connection_targets: "{{ host_ip_map |
+        all_connection_targets: "{{ host_connection_map | map(attribute='connection_target') | list }}"
+        unique_connection_targets: "{{ host_connection_map |
                                        map(attribute='connection_target') |
                                        list |
                                        difference(exclude_patterns) |
                                        difference(['127.0.0.1', '::1']) |
                                        unique |
                                        sort }}"
-        unique_hostnames_vs_targets: >-
-          {{
-            {
-              'unique_hostnames': (hosts_response.json.results | map(attribute='name') | list | difference(exclude_patterns) | unique | length),
-              'unique_targets': (host_ip_map | map(attribute='connection_target') | list | difference(exclude_patterns) | difference(['127.0.0.1', '::1']) | unique | length),
-              'potential_duplicates': (hosts_response.json.results | map(attribute='name') | list | difference(exclude_patterns) | unique | length) - (host_ip_map | map(attribute='connection_target') | list | difference(exclude_patterns) | difference(['127.0.0.1', '::1']) | unique | length)
-            }
-          }}
+        unique_hostnames_vs_targets:
+          unique_hostnames: "{{ hosts_response.json.results | map(attribute='name') | list | difference(exclude_patterns) | unique | length }}"
+          unique_targets: "{{ host_connection_map | map(attribute='connection_target') | list | difference(exclude_patterns) | difference(['127.0.0.1', '::1']) | unique | length }}"
+          potential_duplicates: "{{ (hosts_response.json.results | map(attribute='name') | list | difference(exclude_patterns) | unique | length) - (host_connection_map | map(attribute='connection_target') | list | difference(exclude_patterns) | difference(['127.0.0.1', '::1']) | unique | length) }}"
 
     - name: Get subscription information
       ansible.builtin.uri:
