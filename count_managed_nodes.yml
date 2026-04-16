@@ -112,6 +112,42 @@
                                        difference(exclude_patterns) |
                                        sort }}"
 
+    - name: Get unified jobs statistics
+      ansible.builtin.uri:
+        url: "{{ controller_hostname }}/api/controller/v2/unified_jobs/?page_size=200&order_by=-id"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: unified_jobs_response
+
+    - name: Get job templates
+      ansible.builtin.uri:
+        url: "{{ controller_hostname }}/api/controller/v2/job_templates/"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: job_templates_response
+
+    - name: Build job statistics analysis
+      ansible.builtin.set_fact:
+        total_jobs: "{{ unified_jobs_response.json.count }}"
+        recent_jobs_sample: "{{ unified_jobs_response.json.results }}"
+        successful_jobs: "{{ unified_jobs_response.json.results | selectattr('status', 'equalto', 'successful') | list | length }}"
+        failed_jobs: "{{ unified_jobs_response.json.results | selectattr('status', 'equalto', 'failed') | list | length }}"
+        running_jobs: "{{ unified_jobs_response.json.results | selectattr('status', 'in', ['running', 'pending', 'waiting']) | list | length }}"
+        canceled_jobs: "{{ unified_jobs_response.json.results | selectattr('status', 'equalto', 'canceled') | list | length }}"
+        total_job_templates: "{{ job_templates_response.json.count }}"
+
+    - name: Calculate job success rate
+      ansible.builtin.set_fact:
+        job_success_rate: "{{ ((successful_jobs | int) / ((successful_jobs | int) + (failed_jobs | int)) * 100) | round(2) if ((successful_jobs | int) + (failed_jobs | int)) > 0 else 0 }}"
+
     - name: Validate subscription compliance
       ansible.builtin.assert:
         that:
@@ -132,7 +168,7 @@
       ansible.builtin.debug:
         msg:
           - "========================================"
-          - "AAP MANAGED NODE REPORT"
+          - "AAP MANAGED NODE & AUTOMATION REPORT"
           - "========================================"
           - "Controller: {{ controller_hostname }}"
           - "AAP Version: {{ aap_config.json.version | default('N/A') }}"
@@ -153,6 +189,15 @@
           - "  Subscription Limit: {{ aap_config.json.license_info.instance_count | default('Unlimited') }}"
           - "  Available: {{ (aap_config.json.license_info.instance_count | default(999999) | int) - (active_host_metrics_names | length) }}"
           - ""
+          - "JOB EXECUTION STATISTICS (main_jobevents):"
+          - "  Total Jobs (All Time): {{ total_jobs }}"
+          - "  Recent Jobs Analyzed: {{ recent_jobs_sample | length }}"
+          - "  Successful Jobs: {{ successful_jobs }} ({{ job_success_rate }}%)"
+          - "  Failed Jobs: {{ failed_jobs }}"
+          - "  Running/Pending Jobs: {{ running_jobs }}"
+          - "  Canceled Jobs: {{ canceled_jobs }}"
+          - "  Total Job Templates: {{ total_job_templates }}"
+          - ""
           - "========================================"
           - "HOST METRICS DETAILS:"
           - "{{ active_host_metrics | to_nice_yaml }}"
@@ -163,6 +208,7 @@
           - "Note: Host Metrics count is the authoritative managed node count for AAP 2.4+."
           - "Count excludes localhost and loopback addresses."
           - "Each unique identifiable node counts once, even if in multiple inventories."
+          - "Job statistics based on unified_jobs API (backed by main_jobevents table)."
           - "========================================"
 
     - name: Create summary artifact
@@ -175,6 +221,13 @@
           subscription_limit: "{{ aap_config.json.license_info.instance_count | default(0) }}"
           total_inventories: "{{ inventories_response.json.count }}"
           total_host_entries: "{{ hosts_response.json.count }}"
+          total_jobs: "{{ total_jobs }}"
+          successful_jobs: "{{ successful_jobs }}"
+          failed_jobs: "{{ failed_jobs }}"
+          running_jobs: "{{ running_jobs }}"
+          canceled_jobs: "{{ canceled_jobs }}"
+          job_success_rate: "{{ job_success_rate }}"
+          total_job_templates: "{{ total_job_templates }}"
           controller_host: "{{ controller_hostname }}"
           aap_version: "{{ aap_config.json.version | default('N/A') }}"
           report_timestamp: "{{ ansible_date_time.iso8601 }}"
