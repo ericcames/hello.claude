@@ -158,16 +158,18 @@
         validate_certs: "{{ controller_validate_certs }}"
         return_content: true
       register: job_host_summaries_results
-      loop: "{{ unified_jobs_response.json.results | selectattr('type', 'equalto', 'job') | selectattr('related.job_host_summaries', 'defined') | list }}"
+      loop: "{{ unified_jobs_response.json.results | selectattr('type', 'equalto', 'job') | selectattr('status', 'in', ['successful', 'failed']) | selectattr('related.job_host_summaries', 'defined') | list }}"
       loop_control:
         label: "Job {{ item.id }}"
+      ignore_errors: true
       when:
-        - unified_jobs_response.json.results | selectattr('type', 'equalto', 'job') | list | length > 0
+        - unified_jobs_response.json.results | selectattr('type', 'equalto', 'job') | selectattr('status', 'in', ['successful', 'failed']) | list | length > 0
 
     - name: Build unique host names from job events (main_jobevents)
       ansible.builtin.set_fact:
         all_job_host_summaries: "{{ job_host_summaries_results.results |
                                      default([]) |
+                                     selectattr('json', 'defined') |
                                      map(attribute='json.results') |
                                      flatten |
                                      list }}"
