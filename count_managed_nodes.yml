@@ -105,6 +105,73 @@
           unique_targets: "{{ host_connection_map | map(attribute='connection_target') | list | difference(exclude_patterns) | difference(['127.0.0.1', '::1']) | unique | length }}"
           potential_duplicates: "{{ (hosts_response.json.results | map(attribute='name') | list | difference(exclude_patterns) | unique | length) - (host_connection_map | map(attribute='connection_target') | list | difference(exclude_patterns) | difference(['127.0.0.1', '::1']) | unique | length) }}"
 
+    - name: Perform DNS lookups for hostnames
+      ansible.builtin.command: getent hosts {{ item.hostname }}
+      register: dns_lookups
+      loop: "{{ host_connection_map }}"
+      loop_control:
+        label: "{{ item.hostname }}"
+      ignore_errors: true
+      changed_when: false
+      when:
+        - item.hostname not in exclude_patterns
+        - item.hostname != item.connection_target or not (item.connection_target | ansible.utils.ipaddr)
+
+    - name: Perform DNS lookups for connection targets
+      ansible.builtin.command: getent hosts {{ item.connection_target }}
+      register: dns_target_lookups
+      loop: "{{ host_connection_map }}"
+      loop_control:
+        label: "{{ item.connection_target }}"
+      ignore_errors: true
+      changed_when: false
+      when:
+        - item.connection_target not in exclude_patterns
+        - item.connection_target not in ['127.0.0.1', '::1']
+        - not (item.connection_target | ansible.utils.ipaddr)
+
+    - name: Build DNS resolution results
+      ansible.builtin.set_fact:
+        dns_resolution_map: "{{ dns_resolution_map | default([]) + [dns_entry] }}"
+      loop: "{{ host_connection_map }}"
+      vars:
+        hostname_lookup: "{{ dns_lookups.results | selectattr('item.hostname', 'equalto', item.hostname) | first | default({}) }}"
+        target_lookup: "{{ dns_target_lookups.results | selectattr('item.connection_target', 'equalto', item.connection_target) | first | default({}) }}"
+        hostname_ip: "{{ hostname_lookup.stdout.split()[0] | default('unresolved') if hostname_lookup.rc is defined and hostname_lookup.rc == 0 else 'unresolved' }}"
+        target_ip: "{{ target_lookup.stdout.split()[0] | default(item.connection_target if (item.connection_target | ansible.utils.ipaddr) else 'unresolved') if target_lookup.rc is defined and target_lookup.rc == 0 else (item.connection_target if (item.connection_target | ansible.utils.ipaddr) else 'unresolved') }}"
+        dns_entry:
+          hostname: "{{ item.hostname }}"
+          connection_target: "{{ item.connection_target }}"
+          hostname_resolved_ip: "{{ hostname_ip }}"
+          target_resolved_ip: "{{ target_ip }}"
+          dns_match: "{{ hostname_ip == target_ip if hostname_ip != 'unresolved' and target_ip != 'unresolved' else 'N/A' }}"
+      when: item.hostname not in exclude_patterns
+
+    - name: Analyze DNS resolution results
+      ansible.builtin.set_fact:
+        dns_analysis:
+          total_hosts_checked: "{{ dns_resolution_map | default([]) | length }}"
+          hostname_resolvable: "{{ dns_resolution_map | default([]) | selectattr('hostname_resolved_ip', '!=', 'unresolved') | list | length }}"
+          hostname_unresolvable: "{{ dns_resolution_map | default([]) | selectattr('hostname_resolved_ip', 'equalto', 'unresolved') | list | length }}"
+          target_resolvable: "{{ dns_resolution_map | default([]) | selectattr('target_resolved_ip', '!=', 'unresolved') | list | length }}"
+          target_unresolvable: "{{ dns_resolution_map | default([]) | selectattr('target_resolved_ip', 'equalto', 'unresolved') | list | length }}"
+          dns_mismatches: "{{ dns_resolution_map | default([]) | selectattr('dns_match', 'equalto', false) | list | length }}"
+          unique_resolved_ips: "{{ (dns_resolution_map | default([]) | map(attribute='target_resolved_ip') | list + dns_resolution_map | default([]) | map(attribute='hostname_resolved_ip') | list) | difference(['unresolved']) | unique | length }}"
+      when: dns_resolution_map is defined and dns_resolution_map | length > 0
+
+    - name: Set default DNS analysis if no hosts checked
+      ansible.builtin.set_fact:
+        dns_analysis:
+          total_hosts_checked: 0
+          hostname_resolvable: 0
+          hostname_unresolvable: 0
+          target_resolvable: 0
+          target_unresolvable: 0
+          dns_mismatches: 0
+          unique_resolved_ips: 0
+        dns_resolution_map: []
+      when: dns_resolution_map is not defined or dns_resolution_map | length == 0
+
     - name: Get subscription information
       ansible.builtin.uri:
         url: "{{ controller_hostname }}/api/controller/v2/config/"
@@ -267,6 +334,15 @@
           - "  Potential Multi-Homed Hosts: {{ unique_hostnames_vs_targets.potential_duplicates }}"
           - "  Connection Targets: {{ unique_connection_targets | join(', ') if unique_connection_targets | length > 0 else 'None' }}"
           - ""
+          - "DNS RESOLUTION CHECK:"
+          - "  Total Hosts Checked: {{ dns_analysis.total_hosts_checked }}"
+          - "  Hostnames Resolvable: {{ dns_analysis.hostname_resolvable }}"
+          - "  Hostnames Unresolvable: {{ dns_analysis.hostname_unresolvable }}"
+          - "  Targets Resolvable: {{ dns_analysis.target_resolvable }}"
+          - "  Targets Unresolvable: {{ dns_analysis.target_unresolvable }}"
+          - "  DNS Mismatches: {{ dns_analysis.dns_mismatches }}"
+          - "  Unique DNS-Resolved IPs: {{ dns_analysis.unique_resolved_ips }}"
+          - ""
           - "JOB EXECUTION STATISTICS (main_jobevents):"
           - "  Total Jobs (All Time): {{ total_jobs }}"
           - "  Recent Jobs Analyzed: {{ recent_jobs_sample | length }}"
@@ -295,6 +371,7 @@
           - "Automated hosts extracted from job_host_summaries (aggregated main_jobevents data)."
           - "IP/Target analysis uses ansible_host variable or hostname as connection target."
           - "Multi-homed detection: difference between unique hostnames and unique targets."
+          - "DNS check resolves hostnames and targets to IPs, identifies mismatches and unresolvable hosts."
           - "========================================"
 
     - name: Create summary artifact
@@ -306,6 +383,13 @@
           unique_hostnames: "{{ unique_hostnames_vs_targets.unique_hostnames }}"
           unique_connection_targets: "{{ unique_hostnames_vs_targets.unique_targets }}"
           potential_multi_homed_hosts: "{{ unique_hostnames_vs_targets.potential_duplicates }}"
+          dns_total_hosts_checked: "{{ dns_analysis.total_hosts_checked }}"
+          dns_hostname_resolvable: "{{ dns_analysis.hostname_resolvable }}"
+          dns_hostname_unresolvable: "{{ dns_analysis.hostname_unresolvable }}"
+          dns_target_resolvable: "{{ dns_analysis.target_resolvable }}"
+          dns_target_unresolvable: "{{ dns_analysis.target_unresolvable }}"
+          dns_mismatches: "{{ dns_analysis.dns_mismatches }}"
+          dns_unique_resolved_ips: "{{ dns_analysis.unique_resolved_ips }}"
           total_host_metrics: "{{ host_metrics_response.json.count }}"
           active_host_metrics: "{{ active_host_metrics | length }}"
           subscription_limit: "{{ aap_config.json.license_info.instance_count | default(0) }}"
