@@ -148,6 +148,49 @@
       ansible.builtin.set_fact:
         job_success_rate: "{{ ((successful_jobs | int) / ((successful_jobs | int) + (failed_jobs | int)) * 100) | round(2) if ((successful_jobs | int) + (failed_jobs | int)) > 0 else 0 }}"
 
+    - name: Get job host summaries from recent jobs
+      ansible.builtin.uri:
+        url: "https://{{ controller_hostname }}{{ item.related.job_host_summaries }}"
+        method: GET
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ controller_validate_certs }}"
+        return_content: true
+      register: job_host_summaries_results
+      loop: "{{ unified_jobs_response.json.results | selectattr('type', 'equalto', 'job') | selectattr('related.job_host_summaries', 'defined') | list }}"
+      loop_control:
+        label: "Job {{ item.id }}"
+      when:
+        - unified_jobs_response.json.results | selectattr('type', 'equalto', 'job') | list | length > 0
+
+    - name: Build unique host names from job events (main_jobevents)
+      ansible.builtin.set_fact:
+        all_job_host_summaries: "{{ job_host_summaries_results.results |
+                                     default([]) |
+                                     map(attribute='json.results') |
+                                     flatten |
+                                     list }}"
+      when: job_host_summaries_results is defined
+
+    - name: Extract unique host names from job events
+      ansible.builtin.set_fact:
+        unique_job_event_hosts: "{{ all_job_host_summaries |
+                                    default([]) |
+                                    map(attribute='host_name') |
+                                    unique |
+                                    list |
+                                    difference(exclude_patterns) |
+                                    sort }}"
+        total_job_host_summaries: "{{ all_job_host_summaries | default([]) | length }}"
+      when: all_job_host_summaries is defined
+
+    - name: Set default if no job host summaries found
+      ansible.builtin.set_fact:
+        unique_job_event_hosts: []
+        total_job_host_summaries: 0
+      when: job_host_summaries_results is not defined or job_host_summaries_results.results is not defined
+
     - name: Validate subscription compliance
       ansible.builtin.assert:
         that:
@@ -198,6 +241,11 @@
           - "  Canceled Jobs: {{ canceled_jobs }}"
           - "  Total Job Templates: {{ total_job_templates }}"
           - ""
+          - "AUTOMATED HOSTS FROM JOB EVENTS:"
+          - "  Total Job Host Summaries: {{ total_job_host_summaries }}"
+          - "  Unique Hosts Automated (excl. localhost): {{ unique_job_event_hosts | length }}"
+          - "  Hosts: {{ unique_job_event_hosts | join(', ') if unique_job_event_hosts | length > 0 else 'None' }}"
+          - ""
           - "========================================"
           - "HOST METRICS DETAILS:"
           - "{{ active_host_metrics | to_nice_yaml }}"
@@ -209,6 +257,7 @@
           - "Count excludes localhost and loopback addresses."
           - "Each unique identifiable node counts once, even if in multiple inventories."
           - "Job statistics based on unified_jobs API (backed by main_jobevents table)."
+          - "Automated hosts extracted from job_host_summaries (aggregated main_jobevents data)."
           - "========================================"
 
     - name: Create summary artifact
@@ -216,6 +265,7 @@
         data:
           managed_node_count_inventory_based: "{{ unique_nodes | length }}"
           managed_node_count_host_metrics: "{{ active_host_metrics_names | length }}"
+          managed_node_count_job_events: "{{ unique_job_event_hosts | length }}"
           total_host_metrics: "{{ host_metrics_response.json.count }}"
           active_host_metrics: "{{ active_host_metrics | length }}"
           subscription_limit: "{{ aap_config.json.license_info.instance_count | default(0) }}"
@@ -228,6 +278,8 @@
           canceled_jobs: "{{ canceled_jobs }}"
           job_success_rate: "{{ job_success_rate }}"
           total_job_templates: "{{ total_job_templates }}"
+          total_job_host_summaries: "{{ total_job_host_summaries }}"
+          unique_automated_hosts: "{{ unique_job_event_hosts | join(',') }}"
           controller_host: "{{ controller_hostname }}"
           aap_version: "{{ aap_config.json.version | default('N/A') }}"
           report_timestamp: "{{ ansible_date_time.iso8601 }}"
